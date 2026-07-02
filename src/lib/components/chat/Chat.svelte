@@ -7,6 +7,20 @@
 	import { fade } from 'svelte/transition';
 	const i18n: Writable<i18nType> = getContext('i18n');
 
+	const imageGenerationIntentPatterns = [
+		/(生成|画|绘制|创建|制作|设计).{0,24}(图片|图像|插图|海报|地图|画像|照片|封面|配图)/i,
+		/(图片|图像|插图|海报|地图|画像|照片|封面|配图).{0,24}(生成|画|绘制|创建|制作|设计)/i,
+		/\b(generate|create|draw|make|render)\b.{0,40}\b(image|picture|illustration|poster|map|portrait|photo|cover)\b/i
+	];
+
+	const hasImageGenerationIntent = (content: string | undefined | null) => {
+		if (!content || typeof content !== 'string') {
+			return false;
+		}
+
+		return imageGenerationIntentPatterns.some((pattern) => pattern.test(content));
+	};
+
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 
@@ -1288,12 +1302,38 @@
 			if (message?.role !== 'user') {
 				const messageContent =
 					getOutputText(message?.output) || removeAllDetails(message?.content ?? '');
+				const imageFiles = (message?.files ?? []).filter(
+					(file) => file?.type === 'image' && typeof file?.url === 'string' && file.url.trim()
+				);
+				imageFiles.forEach((file) => {
+					contents = [
+						...contents,
+						{
+							type: 'image',
+							content: JSON.stringify({
+								url: file.url,
+								name: file.name ?? file.filename ?? '',
+								source: 'message-file'
+							})
+						}
+					];
+				});
+
 				if (!messageContent.trim()) {
 					return;
 				}
 
-				const { codeBlocks: codeBlocks, htmlGroups: htmlGroups } =
-					getCodeBlockContents(messageContent);
+				const {
+					codeBlocks: codeBlocks,
+					htmlGroups: htmlGroups,
+					artifacts: artifacts
+				} = getCodeBlockContents(messageContent);
+
+				if (artifacts && artifacts.length > 0) {
+					artifacts.forEach((artifact) => {
+						contents = [...contents, { type: artifact.type, content: artifact.content }];
+					});
+				}
 
 				if (htmlGroups && htmlGroups.length > 0) {
 					htmlGroups.forEach((group) => {
@@ -2359,7 +2399,7 @@
 		}
 	};
 
-	const getFeatures = () => {
+	const getFeatures = ({ imageGeneration = imageGenerationEnabled } = {}) => {
 		let features = {};
 
 		if ($config?.features)
@@ -2368,7 +2408,7 @@
 				image_generation:
 					$config?.features?.enable_image_generation &&
 					($user?.role === 'admin' || $user?.permissions?.features?.image_generation)
-						? imageGenerationEnabled
+						? imageGeneration
 						: false,
 				code_interpreter:
 					$config?.features?.enable_code_interpreter &&
@@ -2459,6 +2499,18 @@
 			$settings?.params?.stream_response ??
 			params?.stream_response ??
 			true;
+
+		const userPrompt =
+			typeof (userMessage?.merged?.content ?? userMessage?.content) === 'string'
+				? (userMessage?.merged?.content ?? userMessage?.content)
+				: '';
+		const canUseImageGeneration = Boolean(
+			$config?.features?.enable_image_generation &&
+			($user?.role === 'admin' || $user?.permissions?.features?.image_generation)
+		);
+		const imageGenerationRequested =
+			canUseImageGeneration && (imageGenerationEnabled || hasImageGenerationIntent(userPrompt));
+
 		// Always include system prompt — backend extracts it and prepends to DB messages.
 		// Only temp chats need conversation messages (persisted chats load from DB).
 		let messages: any[] = [
@@ -2553,7 +2605,8 @@
 				params: {
 					...$settings?.params,
 					...params,
-					stop: getStopTokens()
+					stop: getStopTokens(),
+					...(imageGenerationRequested ? { function_calling: 'legacy' } : {})
 				},
 
 				files: (files?.length ?? 0) > 0 ? files : undefined,
@@ -2569,7 +2622,7 @@
 					// Direct terminal servers — always included when enabled (not routed through selectedToolIds)
 					...($terminalServers ?? []).filter((t) => !t.id)
 				],
-				features: getFeatures(),
+				features: getFeatures({ imageGeneration: imageGenerationRequested }),
 				variables: {
 					...getPromptVariables(
 						$user?.name,

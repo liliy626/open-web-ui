@@ -1534,6 +1534,19 @@ async def add_file_context(messages: list, chat_id: str, user) -> list:
     return messages
 
 
+def has_image_edit_intent(content: str | None) -> bool:
+    if not content:
+        return False
+
+    return bool(
+        re.search(
+            r'(修改|编辑|改成|改为|调整|替换|换成|参考上图|基于上图|基于这张图|把这张图|edit|modify|change|replace|based on (this|the) image|reference image)',
+            content,
+            re.IGNORECASE,
+        )
+    )
+
+
 async def chat_image_generation_handler(request: Request, form_data: dict, extra_params: dict, user):
     metadata = extra_params.get('__metadata__', {})
     chat_id = metadata.get('chat_id', None)
@@ -1573,7 +1586,7 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
 
     system_message_content = ''
 
-    if len(input_images) > 0 and await Config.get('images.edit.enable'):
+    if len(input_images) > 0 and await Config.get('images.edit.enable') and has_image_edit_intent(user_message):
         # Edit image(s)
         try:
             images = await image_edits(
@@ -1610,9 +1623,9 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
 
             system_message_content = '<context>The requested image has been edited and created and is now being shown to the user. Let them know that it has been generated.</context>'
         except Exception as e:
-            log.debug(e)
+            log.exception('Image edit failed')
 
-            error_message = ''
+            error_message = str(e)
             if isinstance(e, HTTPException):
                 if e.detail and isinstance(e.detail, dict):
                     error_message = e.detail.get('message', str(e.detail))
@@ -1708,9 +1721,9 @@ async def chat_image_generation_handler(request: Request, form_data: dict, extra
 
             system_message_content = '<context>The requested image has been created by the system successfully and is now being shown to the user. Let the user know that the image they requested has been generated and is now shown in the chat.</context>'
         except Exception as e:
-            log.debug(e)
+            log.exception('Image generation failed')
 
-            error_message = ''
+            error_message = str(e)
             if isinstance(e, HTTPException):
                 if e.detail and isinstance(e.detail, dict):
                     error_message = e.detail.get('message', str(e.detail))

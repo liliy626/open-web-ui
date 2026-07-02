@@ -7,8 +7,6 @@
 	import { getBackendConfig } from '$lib/apis';
 	import {
 		getImageGenerationModels,
-		getImageGenerationConfig,
-		updateImageGenerationConfig,
 		getConfig,
 		updateConfig,
 		verifyConfigUrl
@@ -117,6 +115,14 @@
 			config.ENABLE_IMAGE_GENERATION = false;
 
 			return null;
+		} else if (
+			config.IMAGE_GENERATION_ENGINE === 'dashscope' &&
+			config.IMAGES_OPENAI_API_KEY === ''
+		) {
+			toast.error($i18n.t('DashScope API Key is required.'));
+			config.ENABLE_IMAGE_GENERATION = false;
+
+			return null;
 		} else if (config.IMAGE_GENERATION_ENGINE === 'gemini' && config.IMAGES_GEMINI_API_KEY === '') {
 			toast.error($i18n.t('Gemini API Key is required.'));
 			config.ENABLE_IMAGE_GENERATION = false;
@@ -159,7 +165,9 @@
 			if (obj && typeof obj === 'object') {
 				return true;
 			}
-		} catch (e) {}
+		} catch {
+			return false;
+		}
 		return false;
 	};
 
@@ -411,6 +419,7 @@
 								placeholder={$i18n.t('Select Engine')}
 							>
 								<option value="openai">{$i18n.t('Default (Open AI)')}</option>
+								<option value="dashscope">{$i18n.t('DashScope / Bailian')}</option>
 								<option value="comfyui">{$i18n.t('ComfyUI')}</option>
 								<option value="automatic1111">{$i18n.t('Automatic1111')}</option>
 								<option value="gemini">{$i18n.t('Gemini')}</option>
@@ -418,12 +427,14 @@
 						</div>
 					</div>
 
-					{#if config?.IMAGE_GENERATION_ENGINE === 'openai'}
+					{#if ['openai', 'dashscope'].includes(config?.IMAGE_GENERATION_ENGINE)}
 						<div class="mb-2.5">
 							<div class="flex w-full justify-between items-center">
 								<div class="text-xs pr-2 shrink-0">
 									<div class="">
-										{$i18n.t('OpenAI API Base URL')}
+										{config?.IMAGE_GENERATION_ENGINE === 'dashscope'
+											? $i18n.t('DashScope API Base URL')
+											: $i18n.t('OpenAI API Base URL')}
 									</div>
 								</div>
 
@@ -443,7 +454,9 @@
 							<div class="flex w-full justify-between items-center">
 								<div class="text-xs pr-2 shrink-0">
 									<div class="">
-										{$i18n.t('OpenAI API Key')}
+										{config?.IMAGE_GENERATION_ENGINE === 'dashscope'
+											? $i18n.t('DashScope API Key')
+											: $i18n.t('OpenAI API Key')}
 									</div>
 								</div>
 
@@ -460,25 +473,27 @@
 							</div>
 						</div>
 
-						<div class="mb-2.5">
-							<div class="flex w-full justify-between items-center">
-								<div class="text-xs pr-2 shrink-0">
-									<div class="">
-										{$i18n.t('OpenAI API Version')}
+						{#if config?.IMAGE_GENERATION_ENGINE === 'openai'}
+							<div class="mb-2.5">
+								<div class="flex w-full justify-between items-center">
+									<div class="text-xs pr-2 shrink-0">
+										<div class="">
+											{$i18n.t('OpenAI API Version')}
+										</div>
 									</div>
-								</div>
 
-								<div class="flex w-full">
-									<div class="flex-1">
-										<input
-											class="w-full text-sm bg-transparent outline-hidden text-right"
-											placeholder={$i18n.t('API Version')}
-											bind:value={config.IMAGES_OPENAI_API_VERSION}
-										/>
+									<div class="flex w-full">
+										<div class="flex-1">
+											<input
+												class="w-full text-sm bg-transparent outline-hidden text-right"
+												placeholder={$i18n.t('API Version')}
+												bind:value={config.IMAGES_OPENAI_API_VERSION}
+											/>
+										</div>
 									</div>
 								</div>
 							</div>
-						</div>
+						{/if}
 
 						<div class="mb-2.5">
 							<div class="flex w-full justify-between items-center">

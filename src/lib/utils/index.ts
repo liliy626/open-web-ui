@@ -2035,19 +2035,46 @@ export const getCodeBlockContents = (content: string): object => {
 
 	const codeBlockContents = content.match(/```[\s\S]*?```/g);
 
-	let codeBlocks = [];
+	const codeBlocks = [];
+	const artifacts: Array<{ type: 'document' | 'report' | 'image'; content: string }> = [];
 
 	// Groups of related HTML/CSS/JS blocks. Each HTML block starts a new group;
 	// CSS and JS blocks attach to the current (most recent) group.
 	// This preserves the existing behaviour for "dumb" models that output
 	// separate html/css/js blocks meant to form a single page, while also
 	// allowing multiple distinct HTML blocks to produce separate artifacts.
-	let htmlGroups: Array<{ html: string; css: string; js: string }> = [];
+	const htmlGroups: Array<{ html: string; css: string; js: string }> = [];
 
 	const initDefaultGroup = () => {
 		if (htmlGroups.length === 0) {
 			htmlGroups.push({ html: '', css: '', js: '' });
 		}
+	};
+
+	const getArtifactType = (lang: string): 'document' | 'report' | 'image' | null => {
+		const normalizedLang = lang.replace(/[_\s]+/g, '-');
+
+		if (
+			[
+				'artifact-document',
+				'artifact-doc',
+				'document-artifact',
+				'doc-artifact',
+				'document'
+			].includes(normalizedLang)
+		) {
+			return 'document';
+		}
+
+		if (['artifact-report', 'report-artifact', 'report'].includes(normalizedLang)) {
+			return 'report';
+		}
+
+		if (['artifact-image', 'image-artifact'].includes(normalizedLang)) {
+			return 'image';
+		}
+
+		return null;
 	};
 
 	if (codeBlockContents) {
@@ -2059,6 +2086,12 @@ export const getCodeBlockContents = (content: string): object => {
 
 		codeBlocks.forEach((block) => {
 			const { lang, code } = block;
+			const artifactType = getArtifactType(lang);
+
+			if (artifactType) {
+				artifacts.push({ type: artifactType, content: code.trim() });
+				return;
+			}
 
 			if (lang === 'html') {
 				// Each HTML block starts a new group
@@ -2106,19 +2139,19 @@ export const getCodeBlockContents = (content: string): object => {
 	const htmlContent = htmlGroups.map((g) => g.html).join('');
 	const cssContent = htmlGroups.map((g) => g.css).join('');
 	const jsContent = htmlGroups.map((g) => g.js).join('');
+	const renderedHtmlGroups = htmlGroups.filter((g) => g.html.trim() || g.css.trim() || g.js.trim());
 
 	return {
 		codeBlocks: codeBlocks,
 		html: htmlContent.trim(),
 		css: cssContent.trim(),
 		js: jsContent.trim(),
-		htmlGroups: htmlGroups
-			.filter((g) => g.html.trim() || g.css.trim() || g.js.trim())
-			.map((g) => ({
-				html: g.html.trim(),
-				css: g.css.trim(),
-				js: g.js.trim()
-			}))
+		artifacts,
+		htmlGroups: renderedHtmlGroups.map((g) => ({
+			html: g.html.trim(),
+			css: g.css.trim(),
+			js: g.js.trim()
+		}))
 	};
 };
 export const parseFrontmatter = (content) => {

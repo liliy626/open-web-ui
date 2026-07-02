@@ -63,6 +63,19 @@ IMAGE_FILE_EXTENSIONS = {
     'image/webp': '.webp',
 }
 
+DASHSCOPE_TASK_TIMEOUT_SECONDS = 180
+DASHSCOPE_TASK_POLL_INTERVAL_SECONDS = 3
+DASHSCOPE_TASK_TERMINAL_STATUSES = {'SUCCEEDED', 'FAILED', 'UNKNOWN', 'CANCELED'}
+DASHSCOPE_IMAGE_MODELS = [
+    {'id': 'wan2.7-image-pro', 'name': 'wan2.7-image-pro'},
+    {'id': 'wan2.7-image', 'name': 'wan2.7-image'},
+    {'id': 'wan2.6-image', 'name': 'wan2.6-image'},
+    {'id': 'wan2.6-t2i', 'name': 'wan2.6-t2i'},
+    {'id': 'qwen-image-2.0-pro', 'name': 'qwen-image-2.0-pro'},
+    {'id': 'qwen-image-plus', 'name': 'qwen-image-plus'},
+    {'id': 'qwen-image', 'name': 'qwen-image'},
+]
+
 IMAGE_CONFIG_KEYS = {
     'ENABLE_IMAGE_GENERATION': 'image_generation.enable',
     'ENABLE_IMAGE_PROMPT_GENERATION': 'image_generation.prompt.enable',
@@ -202,6 +215,8 @@ async def get_image_model(request):
     image_config = await get_image_config()
     if image_config.IMAGE_GENERATION_ENGINE == 'openai':
         return image_config.IMAGE_GENERATION_MODEL if image_config.IMAGE_GENERATION_MODEL else 'dall-e-2'
+    elif image_config.IMAGE_GENERATION_ENGINE == 'dashscope':
+        return image_config.IMAGE_GENERATION_MODEL if image_config.IMAGE_GENERATION_MODEL else 'wan2.7-image-pro'
     elif image_config.IMAGE_GENERATION_ENGINE == 'gemini':
         return image_config.IMAGE_GENERATION_MODEL if image_config.IMAGE_GENERATION_MODEL else 'imagen-3.0-generate-002'
     elif image_config.IMAGE_GENERATION_ENGINE == 'comfyui':
@@ -284,11 +299,17 @@ async def update_config(request: Request, form_data: ImagesConfig, user=Depends(
             ),
         )
 
-    pattern = r'^\d+x\d+$'
-    if not (form_data.IMAGE_SIZE == 'auto' or form_data.IMAGE_SIZE == '' or re.match(pattern, form_data.IMAGE_SIZE)):
+    pattern = r'^(\d+[x*]\d+|[124]K)$' if form_data.IMAGE_GENERATION_ENGINE == 'dashscope' else r'^\d+x\d+$'
+    if not (
+        form_data.IMAGE_SIZE == 'auto'
+        or form_data.IMAGE_SIZE == ''
+        or re.match(pattern, form_data.IMAGE_SIZE, re.IGNORECASE)
+    ):
         raise HTTPException(
             status_code=400,
-            detail=ERROR_MESSAGES.INCORRECT_FORMAT('  (e.g., 512x512).'),
+            detail=ERROR_MESSAGES.INCORRECT_FORMAT(
+                '  (e.g., 512x512, 1024*1024, or 2K for DashScope).'
+            ),
         )
 
     if form_data.IMAGE_STEPS < 0:
@@ -326,6 +347,173 @@ def get_automatic1111_api_auth(image_config):
         auth1111_base64_encoded_bytes = base64.b64encode(auth1111_byte_string)
         auth1111_base64_encoded_string = auth1111_base64_encoded_bytes.decode('utf-8')
         return f'Basic {auth1111_base64_encoded_string}'
+
+
+def get_dashscope_api_base_url(base_url: str) -> str:
+    base_url = (base_url or '').strip().rstrip('/')
+    if not base_url:
+        raise ValueError('DashScope API Base URL is required')
+
+    if base_url.endswith('/compatible-mode/v1'):
+        return f'{base_url.removesuffix("/compatible-mode/v1")}/api/v1'
+
+    if base_url.endswith('/api/v1'):
+        return base_url
+
+    parsed = urlparse(base_url)
+    if parsed.scheme and parsed.netloc and parsed.path in ('', '/'):
+        return f'{base_url}/api/v1'
+
+    return base_url
+
+
+def get_dashscope_image_size(size: str | None) -> str | None:
+    if not size or size == 'auto':
+        return None
+
+    size = size.strip()
+    if not size:
+        return None
+
+    upper_size = size.upper()
+    if upper_size in {'1K', '2K', '4K'}:
+        return upper_size
+
+    return size.lower().replace('x', '*')
+
+
+def get_dashscope_extra_params(params: dict | str | None) -> tuple[dict, float, float]:
+    if not isinstance(params, dict):
+        return {}, DASHSCOPE_TASK_TIMEOUT_SECONDS, DASHSCOPE_TASK_POLL_INTERVAL_SECONDS
+
+    timeout = float(params.get('_dashscope_timeout_seconds', DASHSCOPE_TASK_TIMEOUT_SECONDS))
+    poll_interval = float(params.get('_dashscope_poll_interval_seconds', DASHSCOPE_TASK_POLL_INTERVAL_SECONDS))
+
+    dashscope_params = {
+        key: value
+        for key, value in params.items()
+        if key
+        not in {
+            '_dashscope_timeout_seconds',
+            '_dashscope_poll_interval_seconds',
+            'response_format',
+        }
+    }
+    return dashscope_params, timeout, poll_interval
+
+
+def get_dashscope_task_headers(headers: dict) -> dict:
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in {'content-type', 'x-dashscope-async'}
+    }
+
+
+def get_dashscope_trusted_image_base_url(image_url: str) -> str | None:
+    parsed = urlparse(image_url)
+    hostname = parsed.hostname or ''
+    labels = hostname.split('.')
+
+    if (
+        parsed.scheme == 'https'
+        and len(labels) >= 4
+        and labels[0].startswith('dashscope-')
+        and labels[1].startswith('oss-')
+        and labels[-2:] == ['aliyuncs', 'com']
+    ):
+        return f'{parsed.scheme}://{parsed.netloc}'
+
+    return None
+
+
+def build_dashscope_generation_payload(model: str, form_data: CreateImageForm, image_config) -> tuple[dict, float, float]:
+    params, timeout, poll_interval = get_dashscope_extra_params(image_config.IMAGES_OPENAI_API_PARAMS)
+
+    size = get_dashscope_image_size(form_data.size or image_config.IMAGE_SIZE)
+    parameters = {
+        **({'size': size} if size else {}),
+        **({'n': form_data.n} if form_data.n else {}),
+        **({'negative_prompt': form_data.negative_prompt} if form_data.negative_prompt else {}),
+        **params,
+    }
+
+    return (
+        {
+            'model': model,
+            'input': {
+                'messages': [
+                    {
+                        'role': 'user',
+                        'content': [{'text': form_data.prompt}],
+                    }
+                ]
+            },
+            'parameters': parameters,
+        },
+        timeout,
+        poll_interval,
+    )
+
+
+def get_dashscope_image_urls(response: dict) -> list[str]:
+    output = response.get('output') or {}
+    urls = []
+
+    for result in output.get('results') or []:
+        if result.get('url'):
+            urls.append(result['url'])
+
+    for choice in output.get('choices') or []:
+        message = choice.get('message') or {}
+        for item in message.get('content') or []:
+            if item.get('image'):
+                urls.append(item['image'])
+
+    return urls
+
+
+def get_dashscope_error_message(response: dict, default: str) -> str:
+    parts = []
+    for key in ('code', 'message', 'request_id', 'requestId'):
+        value = response.get(key)
+        if value:
+            parts.append(f'{key}={value}')
+
+    output = response.get('output') or {}
+    for key in ('task_id', 'task_status', 'message', 'code'):
+        value = output.get(key)
+        if value:
+            parts.append(f'{key}={value}')
+
+    return '; '.join(parts) if parts else default
+
+
+async def read_dashscope_json_response(response) -> dict:
+    body = await response.json(content_type=None)
+    if response.status >= 400:
+        raise ValueError(get_dashscope_error_message(body, f'DashScope request failed: HTTP {response.status}'))
+    return body
+
+
+async def wait_for_dashscope_task(session, task_url: str, headers: dict, timeout: float, poll_interval: float) -> dict:
+    deadline = asyncio.get_running_loop().time() + timeout
+
+    while True:
+        async with session.get(task_url, headers=headers, ssl=AIOHTTP_CLIENT_SESSION_SSL) as response:
+            body = await read_dashscope_json_response(response)
+
+        task_status = (body.get('output') or {}).get('task_status')
+        if task_status == 'SUCCEEDED':
+            return body
+
+        if task_status in DASHSCOPE_TASK_TERMINAL_STATUSES:
+            raise ValueError(get_dashscope_error_message(body, 'DashScope image generation task failed'))
+
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f'DashScope image generation task timed out after {timeout:g} seconds')
+
+        await asyncio.sleep(poll_interval)
 
 
 @router.get('/config/url/verify')
@@ -373,6 +561,8 @@ async def get_models(request: Request, user=Depends(get_verified_user)):
                 {'id': 'gpt-image-1', 'name': 'GPT-IMAGE 1'},
                 {'id': 'gpt-image-1.5', 'name': 'GPT-IMAGE 1.5'},
             ]
+        elif image_config.IMAGE_GENERATION_ENGINE == 'dashscope':
+            return DASHSCOPE_IMAGE_MODELS
         elif image_config.IMAGE_GENERATION_ENGINE == 'gemini':
             return [
                 {'id': 'imagen-3.0-generate-002', 'name': 'imagen-3.0 generate-002'},
@@ -668,6 +858,63 @@ async def image_generations(
                     image_data, content_type = await get_image_data(image['b64_json'])
 
                 _, url = await upload_image(request, image_data, content_type, {**data, **metadata}, user)
+                images.append({'url': url})
+            return images
+
+        elif image_config.IMAGE_GENERATION_ENGINE == 'dashscope':
+            if not image_config.IMAGES_OPENAI_API_KEY:
+                raise ValueError('DashScope API Key is required')
+
+            api_base_url = get_dashscope_api_base_url(image_config.IMAGES_OPENAI_API_BASE_URL)
+            headers = {
+                'Authorization': f'Bearer {image_config.IMAGES_OPENAI_API_KEY}',
+                'Content-Type': 'application/json',
+                'X-DashScope-Async': 'enable',
+            }
+
+            if ENABLE_FORWARD_USER_INFO_HEADERS:
+                headers = include_user_info_headers(headers, user)
+
+            data, timeout, poll_interval = build_dashscope_generation_payload(model, form_data, image_config)
+
+            session = await get_session()
+            async with session.post(
+                url=f'{api_base_url}/services/aigc/image-generation/generation',
+                json=data,
+                headers=headers,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
+            ) as r:
+                res = await read_dashscope_json_response(r)
+
+            task_id = (res.get('output') or {}).get('task_id')
+            if not task_id:
+                raise ValueError(get_dashscope_error_message(res, 'DashScope response did not include task_id'))
+
+            task_res = await wait_for_dashscope_task(
+                session,
+                f'{api_base_url}/tasks/{quote(task_id)}',
+                get_dashscope_task_headers(headers),
+                timeout,
+                poll_interval,
+            )
+            image_urls = get_dashscope_image_urls(task_res)
+            if not image_urls:
+                raise ValueError(get_dashscope_error_message(task_res, 'DashScope response did not include image URLs'))
+
+            images = []
+            for image_url in image_urls:
+                image_data, content_type = await get_image_data(
+                    image_url,
+                    {k: v for k, v in headers.items() if k != 'Content-Type'},
+                    trusted_base_url=get_dashscope_trusted_image_base_url(image_url),
+                )
+                _, url = await upload_image(
+                    request,
+                    image_data,
+                    content_type,
+                    {**data, 'task_id': task_id, **metadata},
+                    user,
+                )
                 images.append({'url': url})
             return images
 

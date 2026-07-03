@@ -1,119 +1,28 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 
 	import { WEBUI_NAME, showSidebar } from '$lib/stores';
-	import { askCampusKnowledge, type CampusKnowledgeAskResponse } from '$lib/apis/campus/knowledge';
+	import { getCampusApps, type CampusAgentApp } from '$lib/apis/campus/apps';
 
-	import ArchiveBox from '$lib/components/icons/ArchiveBox.svelte';
 	import BookOpen from '$lib/components/icons/BookOpen.svelte';
 	import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
-	import Clipboard from '$lib/components/icons/Clipboard.svelte';
 	import Component from '$lib/components/icons/Component.svelte';
 	import Document from '$lib/components/icons/Document.svelte';
-	import DocumentPage from '$lib/components/icons/DocumentPage.svelte';
 	import Grid from '$lib/components/icons/Grid.svelte';
 	import Home from '$lib/components/icons/Home.svelte';
 	import Note from '$lib/components/icons/Note.svelte';
-	import QuestionMarkCircle from '$lib/components/icons/QuestionMarkCircle.svelte';
 	import Search from '$lib/components/icons/Search.svelte';
 	import Sparkles from '$lib/components/icons/Sparkles.svelte';
 	import User from '$lib/components/icons/User.svelte';
 
-	type LibraryTone = 'blue' | 'cyan' | 'green' | 'amber' | 'purple' | 'slate';
-
-	type LibraryCategory = {
+	type AppCategory = {
 		id: string;
-		title: string;
-		count: number;
-		description: string;
-		icon: typeof DocumentPage;
-		tone: LibraryTone;
+		label: string;
+		apps: CampusAgentApp[];
 	};
 
-	type HotQuestion = {
-		id: string;
-		title: string;
-		teacher: string;
-		likes: number;
-	};
-
-	const libraryCategories: LibraryCategory[] = [
-		{
-			id: 'rules',
-			title: '制度文件',
-			count: 86,
-			description: '校内制度、办法、规则',
-			icon: BookOpen,
-			tone: 'blue'
-		},
-		{
-			id: 'policy',
-			title: '政策文件',
-			count: 124,
-			description: '上级政策、教育法规',
-			icon: Document,
-			tone: 'cyan'
-		},
-		{
-			id: 'work-plan',
-			title: '工作方案',
-			count: 73,
-			description: '各类专项方案',
-			icon: Clipboard,
-			tone: 'green'
-		},
-		{
-			id: 'case-template',
-			title: '案例模板',
-			count: 58,
-			description: '历史案例参考',
-			icon: ArchiveBox,
-			tone: 'amber'
-		},
-		{
-			id: 'research',
-			title: '历史研判',
-			count: 142,
-			description: 'AI 生成的过往研判',
-			icon: Sparkles,
-			tone: 'purple'
-		},
-		{
-			id: 'qa',
-			title: '问答库 · 精选',
-			count: 32,
-			description: '问吧沉淀的高频答案',
-			icon: QuestionMarkCircle,
-			tone: 'slate'
-		}
-	];
-
-	const hotQuestions: HotQuestion[] = [
-		{
-			id: 'late-homework-rule',
-			title: '连续请假超过 3 天有什么规定？',
-			teacher: '陈校长',
-			likes: 12
-		},
-		{
-			id: 'school-supervision',
-			title: '校车管理有什么规定？',
-			teacher: '刘老师',
-			likes: 2
-		},
-		{
-			id: 'canteen-check',
-			title: '校园安全检查的频次规定？',
-			teacher: '王主任',
-			likes: 8
-		},
-		{
-			id: 'double-reduction',
-			title: '“双减”对作业的具体要求？',
-			teacher: '李老师',
-			likes: 23
-		}
-	];
+	type AppIcon = typeof Grid;
 
 	const bottomNav = [
 		{ id: 'school', label: '校情', icon: Home, href: '/' },
@@ -123,50 +32,78 @@
 		{ id: 'mine', label: '我的', icon: User, href: '/apps' }
 	];
 
-	let question = '';
-	let asking = false;
-	let answer: CampusKnowledgeAskResponse | null = null;
-	let askError = '';
+	const iconMap: Record<string, AppIcon> = {
+		book: BookOpen,
+		component: Component,
+		document: Document,
+		grid: Grid,
+		home: Home,
+		note: Note,
+		search: Search,
+		sparkles: Sparkles
+	};
 
-	const toneClass = (tone: LibraryTone) => {
-		const classes = {
-			blue: 'bg-blue-50 text-blue-600 ring-blue-100',
-			cyan: 'bg-cyan-50 text-cyan-600 ring-cyan-100',
-			green: 'bg-emerald-50 text-emerald-600 ring-emerald-100',
-			amber: 'bg-amber-50 text-amber-600 ring-amber-100',
-			purple: 'bg-violet-50 text-violet-600 ring-violet-100',
-			slate: 'bg-slate-50 text-slate-600 ring-slate-200'
-		};
+	let apps: CampusAgentApp[] = [];
+	let loading = true;
+	let loadError = '';
+	let activeCategory = 'all';
+	let frameApp: CampusAgentApp | null = null;
 
-		return classes[tone];
+	$: categories = groupAppsByCategory(apps);
+	$: filteredApps =
+		activeCategory === 'all' ? apps : apps.filter((app) => app.category === activeCategory);
+
+	const getAppIcon = (icon: string) => iconMap[icon] ?? Grid;
+
+	const groupAppsByCategory = (items: CampusAgentApp[]): AppCategory[] => {
+		const grouped = new Map<string, AppCategory>();
+
+		for (const app of items) {
+			if (!grouped.has(app.category)) {
+				grouped.set(app.category, {
+					id: app.category,
+					label: app.category_label,
+					apps: []
+				});
+			}
+
+			grouped.get(app.category)?.apps.push(app);
+		}
+
+		return Array.from(grouped.values());
+	};
+
+	const openApp = (app: CampusAgentApp) => {
+		if (app.display_mode === 'native') {
+			goto(app.entry_url);
+			return;
+		}
+
+		if (app.display_mode === 'iframe') {
+			frameApp = app;
+			return;
+		}
+
+		window.open(app.entry_url, '_blank', 'noopener,noreferrer');
 	};
 
 	const navigateTo = (href: string) => {
 		goto(href);
 	};
 
-	const askHandler = async () => {
-		const trimmedQuestion = question.trim();
-		if (!trimmedQuestion || asking) {
-			return;
-		}
-
-		asking = true;
-		answer = null;
-		askError = '';
-
+	onMount(async () => {
 		try {
-			answer = await askCampusKnowledge(localStorage.token, trimmedQuestion);
+			apps = await getCampusApps(localStorage.token);
 		} catch (error) {
-			askError = `${error}`;
+			loadError = `${error}`;
 		} finally {
-			asking = false;
+			loading = false;
 		}
-	};
+	});
 </script>
 
 <svelte:head>
-	<title>智库 • {$WEBUI_NAME}</title>
+	<title>应用中心 • {$WEBUI_NAME}</title>
 </svelte:head>
 
 <div
@@ -197,186 +134,165 @@
 						<ChevronRight className="size-3 rotate-90 text-slate-400" strokeWidth="2" />
 					</button>
 
-					<div
-						class="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-					>
-						本周 +8
+					<div class="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-medium text-blue-700">
+						{apps.length} 个应用
 					</div>
 				</div>
 
 				<div class="mt-3 flex items-end gap-3">
-					<h1 class="text-[24px] font-semibold leading-8 tracking-normal">智库</h1>
-					<p class="pb-1 text-xs text-slate-500">依据中心 · 415 份 · 被研判引用 1,142 次</p>
+					<h1 class="text-[24px] font-semibold leading-8 tracking-normal">应用中心</h1>
+					<p class="pb-1 text-xs text-slate-500">智能体 · 工具 · 智库 · 画布</p>
 				</div>
 			</section>
 
 			<section class="relative shrink-0 bg-[#f4f7fc] px-4 pb-3 pt-3">
 				<div
-					class="flex items-center gap-2 rounded-xl border border-blue-100 bg-white p-1.5 shadow-[0_8px_24px_rgba(42,67,180,0.08)]"
+					class="flex items-center gap-2 rounded-xl border border-blue-100 bg-white px-3 py-2 shadow-[0_8px_24px_rgba(42,67,180,0.08)]"
 				>
-					<div class="flex min-w-0 flex-1 items-center gap-2 px-2">
-						<Sparkles className="size-4 shrink-0 text-blue-600" strokeWidth="2" />
-						<input
-							bind:value={question}
-							class="h-9 min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-700 outline-hidden placeholder:text-slate-400"
-							placeholder="“听评课考核办法是什么？”"
-							aria-label="输入智库问题"
-							on:keydown={(event) => {
-								if (event.key === 'Enter') {
-									askHandler();
-								}
-							}}
-						/>
-					</div>
-
-					<button
-						type="button"
-						class="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-blue-700 px-3 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(37,78,210,0.24)] transition active:scale-[0.98]"
-						disabled={asking}
-						on:click={askHandler}
-					>
-						<Search className="size-3.5" strokeWidth="2.3" />
-						{asking ? '问中' : '问'}
-					</button>
+					<Search className="size-4 shrink-0 text-blue-600" strokeWidth="2" />
+					<input
+						class="h-8 min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-700 outline-hidden placeholder:text-slate-400"
+						placeholder="搜索应用、智能体或工具"
+						aria-label="搜索应用"
+					/>
 				</div>
 
-				<p class="mt-2 truncate px-1 text-[11px] leading-4 text-slate-400">
-					只引制度条款 · 带原文出处 · 不替你做判断（需判断请发起研判）
-				</p>
-
-				{#if askError}
-					<div
-						class="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700"
+				<div class="mt-3 flex gap-2 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch]">
+					<button
+						type="button"
+						class="shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition {activeCategory ===
+						'all'
+							? 'border-blue-100 bg-blue-50 text-blue-700'
+							: 'border-slate-200 bg-white text-slate-500'}"
+						on:click={() => (activeCategory = 'all')}
 					>
-						{askError}
-					</div>
-				{:else if answer}
-					<div
-						class="mt-3 rounded-xl border border-blue-100 bg-white px-3 py-3 shadow-[0_8px_24px_rgba(42,67,180,0.08)]"
-					>
-						<div class="text-xs font-semibold text-blue-700">RAGFlow 回答</div>
-						<div class="mt-1 line-clamp-4 whitespace-pre-wrap text-xs leading-5 text-slate-700">
-							{answer.answer}
-						</div>
-						{#if answer.references.length > 0}
-							<div class="mt-2 truncate text-[11px] text-slate-400">
-								引用 {answer.references.length} 条 · {answer.references[0]?.document_name ??
-									'来源文档'}
-							</div>
-						{/if}
-					</div>
-				{/if}
+						全部
+					</button>
+					{#each categories as category}
+						<button
+							type="button"
+							class="shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition {activeCategory ===
+							category.id
+								? 'border-blue-100 bg-blue-50 text-blue-700'
+								: 'border-slate-200 bg-white text-slate-500'}"
+							on:click={() => (activeCategory = category.id)}
+						>
+							{category.label}
+						</button>
+					{/each}
+				</div>
 			</section>
 
 			<section
 				class="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 [-webkit-overflow-scrolling:touch]"
 			>
-				<div class="flex items-center justify-between pb-2 pt-1">
-					<div class="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-						<Component className="size-3.5" strokeWidth="2" />
-						分类浏览
+				{#if loading}
+					<div
+						class="rounded-xl border border-slate-200/80 bg-white px-4 py-5 text-sm text-slate-500"
+					>
+						正在加载应用
 					</div>
-					<div class="text-[11px] text-slate-500">共 6 大类</div>
-				</div>
-
-				<div class="grid grid-cols-2 gap-2.5">
-					{#each libraryCategories as category}
-						<button
-							type="button"
-							class="min-w-0 rounded-xl border border-slate-200/80 bg-white p-3 text-left shadow-[0_1px_2px_rgba(31,35,41,0.04),0_8px_22px_rgba(31,35,41,0.05)] transition active:scale-[0.985]"
-							aria-label={`打开${category.title}`}
-						>
-							<div class="flex items-center gap-3">
-								<div
-									class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ring-1 {toneClass(
-										category.tone
-									)}"
-								>
-									<svelte:component this={category.icon} className="size-4.5" strokeWidth="2" />
-								</div>
-
-								<div class="min-w-0">
-									<div class="truncate text-sm font-semibold text-slate-950">
-										{category.title}
-										<span class="ml-1 text-[11px] font-medium text-slate-400">{category.count}</span
-										>
-									</div>
-									<div class="mt-0.5 truncate text-[11px] leading-4 text-slate-400">
-										{category.description}
-									</div>
-								</div>
-							</div>
-						</button>
-					{/each}
-				</div>
-
-				<div class="mt-4 flex items-center justify-between">
-					<div class="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-slate-900">
-						<QuestionMarkCircle className="size-3.5 shrink-0 text-blue-700" strokeWidth="2" />
-						<span class="truncate">问吧 · 大家都在问</span>
-						<span class="text-xs font-normal text-slate-400">· 与「精选」同一问答库</span>
+				{:else if loadError}
+					<div
+						class="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-700"
+					>
+						{loadError}
 					</div>
-					<button type="button" class="shrink-0 text-[11px] font-semibold text-blue-700">
-						全部 56 →
-					</button>
-				</div>
+				{:else}
+					<div class="grid gap-3 pb-2">
+						{#each filteredApps as app}
+							<button
+								type="button"
+								class="min-w-0 rounded-xl border border-slate-200/80 bg-white p-3.5 text-left shadow-[0_1px_2px_rgba(31,35,41,0.04),0_8px_22px_rgba(31,35,41,0.05)] transition active:scale-[0.985]"
+								aria-label={`打开${app.name}`}
+								on:click={() => openApp(app)}
+							>
+								<div class="flex items-center gap-3">
+									<div
+										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700 ring-1 ring-blue-100"
+									>
+										<svelte:component
+											this={getAppIcon(app.icon)}
+											className="size-5"
+											strokeWidth="2"
+										/>
+									</div>
 
-				<div
-					class="mt-2 overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(31,35,41,0.04),0_8px_22px_rgba(31,35,41,0.05)]"
-				>
-					{#each hotQuestions as question, index}
-						<button
-							type="button"
-							class="flex w-full items-center gap-3 px-3.5 py-3 text-left transition active:bg-slate-50 {index ===
-							0
-								? ''
-								: 'border-t border-slate-100'}"
-							aria-label={`查看问题：${question.title}`}
-						>
-							<div class="flex h-5 w-5 shrink-0 items-center justify-center text-violet-500">
-								<Note className="size-3.5" strokeWidth="2" />
-							</div>
+									<div class="min-w-0 flex-1">
+										<div class="flex min-w-0 items-center gap-2">
+											<div class="truncate text-[15px] font-semibold text-slate-950">
+												{app.name}
+											</div>
+											{#if app.badge}
+												<span
+													class="shrink-0 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+													>{app.badge}</span
+												>
+											{/if}
+										</div>
+										<div class="mt-0.5 truncate text-[11px] leading-4 text-slate-400">
+											{app.category_label}
+										</div>
+										<div class="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">
+											{app.description}
+										</div>
+									</div>
 
-							<div class="min-w-0 flex-1">
-								<div class="truncate text-[13px] font-semibold leading-5 text-slate-900">
-									{question.title}
+									<ChevronRight className="size-4 shrink-0 text-slate-300" strokeWidth="2" />
 								</div>
-								<div class="mt-0.5 truncate text-[11px] leading-4 text-slate-400">
-									{question.teacher} · {question.likes} 人点过
-								</div>
-							</div>
-
-							<ChevronRight className="size-4 shrink-0 text-slate-300" strokeWidth="2" />
-						</button>
-					{/each}
-				</div>
+							</button>
+						{/each}
+					</div>
+				{/if}
 			</section>
 
 			<nav
 				class="relative z-10 shrink-0 border-t border-slate-200/90 bg-white/95 px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur"
-				aria-label="智库导航"
+				aria-label="应用导航"
 			>
 				<div class="grid grid-cols-5">
 					{#each bottomNav as item}
 						<button
 							type="button"
 							class="flex min-w-0 flex-col items-center gap-1 rounded-lg px-1 py-1 text-[11px] font-medium transition {item.id ===
-							'knowledge'
+							'apps'
 								? 'text-blue-700'
 								: 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}"
 							on:click={() => navigateTo(item.href)}
-							aria-current={item.id === 'knowledge' ? 'page' : undefined}
+							aria-current={item.id === 'apps' ? 'page' : undefined}
 						>
 							<svelte:component
 								this={item.icon}
 								className="size-5"
-								strokeWidth={item.id === 'knowledge' ? '2' : '1.7'}
+								strokeWidth={item.id === 'apps' ? '2' : '1.7'}
 							/>
 							<span class="truncate">{item.label}</span>
 						</button>
 					{/each}
 				</div>
 			</nav>
+
+			{#if frameApp}
+				<div class="absolute inset-0 z-20 flex flex-col bg-white">
+					<div
+						class="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 px-4"
+					>
+						<div class="min-w-0">
+							<div class="truncate text-sm font-semibold text-slate-900">{frameApp.name}</div>
+							<div class="truncate text-[11px] text-slate-400">{frameApp.entry_url}</div>
+						</div>
+						<button
+							type="button"
+							class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600"
+							on:click={() => (frameApp = null)}
+						>
+							关闭
+						</button>
+					</div>
+					<iframe class="min-h-0 flex-1 border-0" src={frameApp.entry_url} title={frameApp.name}
+					></iframe>
+				</div>
+			{/if}
 		</main>
 	</div>
 </div>

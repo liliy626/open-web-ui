@@ -366,47 +366,45 @@ Postgres MCP            数据库查询工具
 推荐方向：
 
 ```text
-school_id -> school config -> RAGFlow app binding -> Open WebUI UI render
+Open WebUI Group -> group.meta.campus -> RAGFlow/FastGPT/MCP binding -> Open WebUI UI render
 ```
 
-后续应新增统一配置表或配置模型，而不是为每个学校新建一套路由。
+第一阶段不要新增独立的“学校组织”表。Open WebUI 已经有用户组、组成员、AccessGrant 和 User.info：
+
+- 学校 / 组织优先映射为 Open WebUI Group。
+- 学校级 RAGFlow、FastGPT、MCP、Tool Server 配置放在 `group.meta.campus`。
+- 用户归属优先走已有 `group_member`。
+- 资源可见性继续复用 `access_grant`。
+- `user.info.school_id` 可作为临时或外部同步字段，但不是主组织模型。
+
+这样后续接官方更新时，不需要维护一套平行的校园组织系统。
 
 ## 建议的数据模型方向
 
-后续在 Open WebUI 侧新增校园配置时，优先围绕以下概念：
+后续在 Open WebUI 侧新增校园配置时，优先围绕已有 Open WebUI 数据模型扩展：
 
 ```text
-campus_schools
+group
 - id
-- code
 - name
-- logo_url
-- status
+- description
+- meta.campus.school_id
+- meta.campus.ragflow.base_url
+- meta.campus.ragflow.chat_id
+- meta.campus.fastgpt.entry_url
 
-campus_user_school_roles
+group_member
+- group_id
 - user_id
-- school_id
-- role
 
-campus_ragflow_apps
-- school_id
-- name
-- ragflow_base_url
-- ragflow_api_key
-- ragflow_chat_id
-- enabled
-
-campus_app_cards
-- school_id
-- category
-- title
-- subtitle
-- route
-- sort_order
-- enabled
+access_grant
+- resource_type
+- resource_id
+- principal_type = group
+- principal_id = group.id
 ```
 
-第一阶段可以先用配置文件或轻量数据库表，不要一开始做复杂租户平台。
+RAGFlow API Key 不要明文提交到仓库。第一阶段可由环境变量或本地安全配置注入，后续再接 Open WebUI 的加密配置能力。
 
 ## 提交与忽略规则
 

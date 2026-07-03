@@ -4,8 +4,11 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from open_webui.campus.tenants import CampusTenantConfig, resolve_campus_tenant_config, resolve_campus_tenant_config_for_user
+from open_webui.internal.db import get_async_session
 from open_webui.utils.auth import get_verified_user
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
@@ -43,10 +46,23 @@ class CampusAgentApp(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-def get_seed_campus_apps() -> list[CampusAgentApp]:
+def get_seed_campus_apps(school_id: str | None = None) -> list[CampusAgentApp]:
+    tenant = resolve_campus_tenant_config(school_id)
+    ragflow_entry_url = tenant.ragflow.web_url if tenant.ragflow else 'http://localhost:9222'
+    ragflow_api_base_url = tenant.ragflow.base_url if tenant.ragflow else None
+
+    return _build_seed_campus_apps(tenant, ragflow_entry_url, ragflow_api_base_url)
+
+
+def _build_seed_campus_apps(
+    tenant: CampusTenantConfig,
+    ragflow_entry_url: str,
+    ragflow_api_base_url: str | None,
+) -> list[CampusAgentApp]:
     return [
         CampusAgentApp(
             id='campus-overview',
+            school_id=tenant.school_id,
             name='校情总览',
             description='查看学校运行、学生动态、重点事项和本周变化。',
             provider_type=CampusAppProviderType.NATIVE_OPENWEBUI,
@@ -61,26 +77,28 @@ def get_seed_campus_apps() -> list[CampusAgentApp]:
         ),
         CampusAgentApp(
             id='campus-knowledge',
+            school_id=tenant.school_id,
             name='校园智库',
             description='连接 RAGFlow，查询制度、政策、方案、案例和问答库。',
             provider_type=CampusAppProviderType.RAGFLOW_ASSISTANT,
             provider_app_id='ragflow-campus-knowledge',
-            entry_url='http://localhost:9222',
+            entry_url=ragflow_entry_url,
             display_mode=CampusAppDisplayMode.IFRAME,
             category='knowledge',
             category_label='知识与依据',
             icon='note',
             badge='RAGFlow',
-            api_base_url='http://localhost:9380',
+            api_base_url=ragflow_api_base_url,
             sort_order=20,
         ),
         CampusAgentApp(
             id='campus-agent-flow',
+            school_id=tenant.school_id,
             name='智能体编排',
             description='进入 FastGPT，配置校园智能体、工作流、插件和 MCP 能力。',
             provider_type=CampusAppProviderType.FASTGPT_APP,
             provider_app_id='fastgpt-campus-flow',
-            entry_url='http://localhost:3006',
+            entry_url=tenant.fastgpt_entry_url,
             display_mode=CampusAppDisplayMode.IFRAME,
             category='agents',
             category_label='智能体开发',
@@ -90,6 +108,7 @@ def get_seed_campus_apps() -> list[CampusAgentApp]:
         ),
         CampusAgentApp(
             id='school-data-mcp',
+            school_id=tenant.school_id,
             name='学校数据工具',
             description='把 PostgreSQL MCP 等结构化数据工具注册给模型使用。',
             provider_type=CampusAppProviderType.MCP_TOOL,
@@ -104,6 +123,7 @@ def get_seed_campus_apps() -> list[CampusAgentApp]:
         ),
         CampusAgentApp(
             id='report-artifact-studio',
+            school_id=tenant.school_id,
             name='报告画布',
             description='承接 PPT、图片、报告等 OpenAPI 工具输出，在 Artifacts 中预览。',
             provider_type=CampusAppProviderType.OPENAPI_TOOL_SERVER,
@@ -120,8 +140,16 @@ def get_seed_campus_apps() -> list[CampusAgentApp]:
 
 
 @router.get('/', response_model=list[CampusAgentApp])
-async def get_campus_apps(school_id: str = 'yili', user=Depends(get_verified_user)):
+async def get_campus_apps(
+    school_id: str | None = None,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    tenant = await resolve_campus_tenant_config_for_user(user, school_id, db=db)
+    ragflow_entry_url = tenant.ragflow.web_url if tenant.ragflow else 'http://localhost:9222'
+    ragflow_api_base_url = tenant.ragflow.base_url if tenant.ragflow else None
+
     return sorted(
-        [app for app in get_seed_campus_apps() if app.enabled and app.school_id == school_id],
+        [app for app in _build_seed_campus_apps(tenant, ragflow_entry_url, ragflow_api_base_url) if app.enabled],
         key=lambda app: app.sort_order,
     )

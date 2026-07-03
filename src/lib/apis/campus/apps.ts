@@ -30,7 +30,7 @@ export type CampusAgentApp = {
 
 export const getCampusApps = async (
 	token: string,
-	schoolId = 'yili'
+	schoolId = 'meilanhu_middle_school'
 ): Promise<CampusAgentApp[]> => {
 	let error = null;
 

@@ -141,6 +141,7 @@ from open_webui.routers import (
     auths,
     automations,
     calendar,
+    campus_knowledge,
     channels,
     chats,
     configs,
@@ -752,6 +753,7 @@ app.include_router(notes.router, prefix='/api/v1/notes', tags=['notes'])
 
 app.include_router(models.router, prefix='/api/v1/models', tags=['models'])
 app.include_router(knowledge.router, prefix='/api/v1/knowledge', tags=['knowledge'])
+app.include_router(campus_knowledge.router, prefix='/api/v1/campus/knowledge', tags=['campus-knowledge'])
 app.include_router(prompts.router, prefix='/api/v1/prompts', tags=['prompts'])
 app.include_router(tools.router, prefix='/api/v1/tools', tags=['tools'])
 app.include_router(skills.router, prefix='/api/v1/skills', tags=['skills'])

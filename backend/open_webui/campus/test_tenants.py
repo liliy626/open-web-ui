@@ -1,18 +1,15 @@
-import json
 from types import SimpleNamespace
-
-import pytest
 
 from open_webui.campus.tenants import (
     DEFAULT_CAMPUS_SCHOOL_ID,
+    campus_config_from_group,
+    env_campus_config,
     get_school_id_from_user,
-    tenant_config_from_group,
-    resolve_campus_tenant_config,
 )
 
 
 def test_school_id_resolver_prefers_explicit_value():
-    user = SimpleNamespace(school_id='meilanhu_middle_school', info={'school_id': 'gucun_school'})
+    user = SimpleNamespace(info={'school_id': 'meilanhu_middle_school'})
 
     assert get_school_id_from_user(user, 'explicit_school') == 'explicit_school'
 
@@ -24,53 +21,10 @@ def test_school_id_resolver_reads_user_info_before_default():
 
 
 def test_school_id_resolver_uses_default_without_user_binding():
-    user = SimpleNamespace(info={})
-
-    assert get_school_id_from_user(user) == DEFAULT_CAMPUS_SCHOOL_ID
+    assert get_school_id_from_user(SimpleNamespace(info={})) == DEFAULT_CAMPUS_SCHOOL_ID
 
 
-def test_resolve_tenant_config_from_json_env(monkeypatch):
-    monkeypatch.setenv(
-        'CAMPUS_TENANTS_JSON',
-        json.dumps(
-            {
-                'meilanhu_middle_school': {
-                    'name': '美兰湖中学',
-                    'ragflow': {
-                        'base_url': 'http://127.0.0.1:9380',
-                        'api_key': 'test-meilanhu-key',
-                        'chat_id': 'ragflow-chat-meilanhu',
-                        'web_url': 'http://127.0.0.1:9222',
-                    },
-                    'fastgpt': {
-                        'entry_url': 'http://127.0.0.1:3006/app/meilanhu',
-                    },
-                },
-                'gucun_first_high_school': {
-                    'name': '顾村第一中学',
-                    'ragflow': {
-                        'base_url': 'http://127.0.0.1:9380',
-                        'api_key': 'test-gucun-key',
-                        'chat_id': 'ragflow-chat-gucun',
-                    },
-                },
-            },
-            ensure_ascii=False,
-        ),
-    )
-
-    tenant = resolve_campus_tenant_config('meilanhu_middle_school')
-
-    assert tenant.school_id == 'meilanhu_middle_school'
-    assert tenant.name == '美兰湖中学'
-    assert tenant.ragflow is not None
-    assert tenant.ragflow.chat_id == 'ragflow-chat-meilanhu'
-    assert tenant.ragflow.api_key == 'test-meilanhu-key'
-    assert tenant.ragflow.web_url == 'http://127.0.0.1:9222'
-    assert tenant.fastgpt_entry_url == 'http://127.0.0.1:3006/app/meilanhu'
-
-
-def test_tenant_config_from_open_webui_group_meta():
+def test_campus_config_from_open_webui_group_meta():
     group = SimpleNamespace(
         id='group-meilanhu',
         name='美兰湖中学',
@@ -90,18 +44,25 @@ def test_tenant_config_from_open_webui_group_meta():
         },
     )
 
-    tenant = tenant_config_from_group(group)
+    config = campus_config_from_group(group)
 
-    assert tenant.school_id == 'meilanhu_middle_school'
-    assert tenant.name == '美兰湖中学'
-    assert tenant.ragflow is not None
-    assert tenant.ragflow.base_url == 'http://ragflow-api.mlh.local'
-    assert tenant.ragflow.chat_id == 'chat-mlh'
-    assert tenant.fastgpt_entry_url == 'http://fastgpt.mlh.local'
+    assert config['school_id'] == 'meilanhu_middle_school'
+    assert config['name'] == '美兰湖中学'
+    assert config['ragflow']['base_url'] == 'http://ragflow-api.mlh.local'
+    assert config['ragflow']['chat_id'] == 'chat-mlh'
+    assert config['fastgpt']['entry_url'] == 'http://fastgpt.mlh.local'
+    assert config['group_id'] == 'group-meilanhu'
 
 
-def test_resolve_tenant_config_rejects_unknown_school(monkeypatch):
-    monkeypatch.setenv('CAMPUS_TENANTS_JSON', json.dumps({}))
+def test_env_campus_config_preserves_legacy_local_env(monkeypatch):
+    monkeypatch.setenv('RAGFLOW_BASE_URL', 'http://127.0.0.1:9380')
+    monkeypatch.setenv('RAGFLOW_API_KEY', 'test-local-key')
+    monkeypatch.setenv('RAGFLOW_CHAT_ID', 'chat-local')
+    monkeypatch.setenv('RAGFLOW_WEB_URL', 'http://127.0.0.1:9222')
+    monkeypatch.setenv('FASTGPT_WEB_URL', 'http://127.0.0.1:3006')
 
-    with pytest.raises(KeyError):
-        resolve_campus_tenant_config('unknown_school')
+    config = env_campus_config('meilanhu_middle_school')
+
+    assert config['school_id'] == 'meilanhu_middle_school'
+    assert config['ragflow']['api_key'] == 'test-local-key'
+    assert config['fastgpt']['entry_url'] == 'http://127.0.0.1:3006'

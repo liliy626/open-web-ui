@@ -5,12 +5,7 @@ from typing import Any
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, status
-from open_webui.campus.tenants import (
-    CampusTenantConfig,
-    get_school_id_from_user,
-    resolve_campus_tenant_config,
-    resolve_campus_tenant_config_for_user,
-)
+from open_webui.campus.tenants import get_campus_config_for_user, get_school_id_from_user
 from open_webui.env import AIOHTTP_CLIENT_SESSION_SSL, AIOHTTP_CLIENT_TIMEOUT
 from open_webui.internal.db import get_async_session
 from open_webui.utils.auth import get_verified_user
@@ -43,23 +38,11 @@ class CampusKnowledgeAskResponse(BaseModel):
     provider: str = 'ragflow'
 
 
-def _ragflow_config(school_id: str) -> tuple[str, str, str]:
-    try:
-        tenant = resolve_campus_tenant_config(school_id)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f'Campus tenant is not configured: {school_id}',
-        ) from exc
-
-    return _ragflow_config_from_tenant(tenant)
-
-
-def _ragflow_config_from_tenant(tenant: CampusTenantConfig) -> tuple[str, str, str]:
-    ragflow = tenant.ragflow
-    base_url = ragflow.base_url.strip().rstrip('/') if ragflow else ''
-    api_key = ragflow.api_key.strip() if ragflow and ragflow.api_key else ''
-    chat_id = ragflow.chat_id.strip() if ragflow and ragflow.chat_id else ''
+def _ragflow_config(campus: dict[str, Any]) -> tuple[str, str, str]:
+    ragflow = campus.get('ragflow') or {}
+    base_url = str(ragflow.get('base_url') or '').strip().rstrip('/')
+    api_key = str(ragflow.get('api_key') or '').strip()
+    chat_id = str(ragflow.get('chat_id') or '').strip()
 
     missing = [
         name
@@ -119,27 +102,15 @@ async def get_campus_knowledge_status(
     user=Depends(get_verified_user),
     db: AsyncSession = Depends(get_async_session),
 ):
-    resolved_school_id = get_school_id_from_user(user, school_id)
-    try:
-        tenant = await resolve_campus_tenant_config_for_user(user, school_id, db=db)
-    except KeyError:
-        return {
-            'provider': 'ragflow',
-            'school_id': resolved_school_id,
-            'configured': False,
-            'base_url': '',
-            'chat_id': '',
-        }
-
-    resolved_school_id = tenant.school_id
-    ragflow = tenant.ragflow
-    base_url = ragflow.base_url if ragflow else ''
-    api_key = ragflow.api_key if ragflow and ragflow.api_key else ''
-    chat_id = ragflow.chat_id if ragflow and ragflow.chat_id else ''
+    campus = await get_campus_config_for_user(user, school_id, db=db)
+    ragflow = campus.get('ragflow') or {}
+    base_url = ragflow.get('base_url') or ''
+    api_key = ragflow.get('api_key') or ''
+    chat_id = ragflow.get('chat_id') or ''
 
     return {
         'provider': 'ragflow',
-        'school_id': resolved_school_id,
+        'school_id': campus.get('school_id') or get_school_id_from_user(user, school_id),
         'configured': bool(base_url and api_key and chat_id),
         'base_url': base_url,
         'chat_id': chat_id,
@@ -152,15 +123,8 @@ async def ask_campus_knowledge(
     user=Depends(get_verified_user),
     db: AsyncSession = Depends(get_async_session),
 ):
-    school_id = get_school_id_from_user(user, form_data.school_id)
-    try:
-        tenant = await resolve_campus_tenant_config_for_user(user, form_data.school_id, db=db)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f'Campus tenant is not configured: {school_id}',
-        ) from exc
-    base_url, api_key, chat_id = _ragflow_config_from_tenant(tenant)
+    campus = await get_campus_config_for_user(user, form_data.school_id, db=db)
+    base_url, api_key, chat_id = _ragflow_config(campus)
 
     payload = {
         'model': 'model',

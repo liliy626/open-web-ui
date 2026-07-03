@@ -30,12 +30,12 @@ export type CampusAgentApp = {
 
 export const getCampusApps = async (
 	token: string,
-	schoolId = 'meilanhu_middle_school'
+	schoolId?: string
 ): Promise<CampusAgentApp[]> => {
 	let error = null;
 
-	const query = new URLSearchParams({ school_id: schoolId });
-	const res = await fetch(`${WEBUI_API_BASE_URL}/campus/apps/?${query.toString()}`, {
+	const query = schoolId ? `?${new URLSearchParams({ school_id: schoolId }).toString()}` : '';
+	const res = await fetch(`${WEBUI_API_BASE_URL}/campus/apps/${query}`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',

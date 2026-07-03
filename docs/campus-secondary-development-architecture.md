@@ -62,6 +62,146 @@ Open WebUI 负责：
 - 当前学校上下文
 - 调用 RAGFlow API 并展示答案、引用、状态
 
+## 校园智能体开发平台定位
+
+可以基于这些开源项目做“校园智能体开发平台”，但平台不是把 Open WebUI、RAGFlow、FastGPT 的源码混成一个大系统。
+
+推荐定位：
+
+```text
+Open WebUI 二开层 = 校园智能体平台前台与控制台
+RAGFlow        = 智库 / RAG 后端平台
+FastGPT        = Agent / Flow / Plugin 编排平台
+Postgres MCP   = 结构化校园数据查询工具
+Tool Server    = PPT、图片、报表等外部能力
+Artifacts      = 报告、PPT、图片、文档画布
+```
+
+Open WebUI 侧要做的是“校园智能体控制平面”：
+
+- 学校管理
+- 用户和角色
+- 应用中心
+- 智能体目录
+- 工具目录
+- 知识库绑定
+- 模型和供应商绑定
+- 调用记录和状态展示
+- 面向移动端的使用入口
+
+RAGFlow 和 FastGPT 则作为可插拔的能力后端，不直接承担校园 App 前台体验。
+
+### FastGPT 定位
+
+FastGPT 源码当前在：
+
+```text
+/Users/liyu/Documents/工作/demo/FastGPT
+```
+
+当前本机 Docker 里也有 FastGPT 相关服务，例如：
+
+```text
+fastgpt-plugin
+fastgpt-mcp-server
+fastgpt-code-sandbox
+fastgpt-volume-manager
+fastgpt-aiproxy
+fastgpt-pg
+fastgpt-mongo
+fastgpt-minio
+```
+
+FastGPT 适合承担：
+
+- 可视化 Flow / Agent 编排
+- 插件工作流
+- 双向 MCP
+- 应用调试
+- 应用评测
+- AIProxy 模型聚合
+- 代码沙箱、插件沙箱
+- 复杂链路的节点日志和调用链路
+
+FastGPT 不建议承担：
+
+- 校园移动端前台
+- 校情 / 应用 / 研判 / 智库 / 我的 App 壳
+- 学校品牌化 H5 主界面
+- RAGFlow 已经负责的制度文档解析和智库管理
+
+### 平台集成方式
+
+第一阶段不要深改 FastGPT 和 RAGFlow 前端，优先通过 API、Iframe、Deep Link、OpenAPI Tool Server、MCP 接入能力。
+
+推荐集成路径：
+
+```text
+Open WebUI 应用中心
+  -> 校园智能体目录
+  -> 根据 provider_type 跳转或调用
+     - native_openwebui
+     - ragflow_assistant
+     - fastgpt_app
+     - mcp_tool
+     - openapi_tool_server
+```
+
+后端统一维护应用注册，而不是把应用卡片写死在 Svelte 页面里：
+
+```text
+campus_agent_apps
+- id
+- school_id
+- name
+- description
+- provider_type
+- provider_app_id
+- entry_url
+- api_base_url
+- auth_mode
+- icon
+- category
+- enabled
+```
+
+其中：
+
+- `provider_type=ragflow_assistant` 表示调用 RAGFlow 的 Assistant。
+- `provider_type=fastgpt_app` 表示调用或跳转 FastGPT 应用。
+- `provider_type=mcp_tool` 表示注册给模型使用的 MCP 工具。
+- `provider_type=openapi_tool_server` 表示 PPT、图片、报表等 OpenAPI 工具服务。
+- `provider_type=native_openwebui` 表示 Open WebUI 自己实现的校园页面。
+
+### 不能重复建设的部分
+
+FastGPT 和 RAGFlow 都有知识库能力，但校园智库主线仍以 RAGFlow 为准。
+
+FastGPT 的知识库可以用于 FastGPT 自己的 Flow 应用测试，但不要再作为校园“智库”主数据源，否则会出现：
+
+- 同一份制度文件上传两遍
+- 引用来源不一致
+- 解析结果不一致
+- 多学校权限难以统一
+- 用户不知道该去哪个后台维护资料
+
+FastGPT 和 Open WebUI 都能做应用入口，但学校用户前台主入口统一放 Open WebUI。
+
+FastGPT 的应用可以作为“被发布的智能体能力”出现在 Open WebUI 应用中心，而不是替代 Open WebUI 应用中心。
+
+### 商用和部署提醒
+
+FastGPT README 中说明其开源协议允许作为后台服务直接商用，但不允许提供 SaaS 服务，且未商业授权的商用服务需要保留版权信息。
+
+因此如果后续产品要对外售卖或给多客户使用，需要在平台方案里单独确认：
+
+- FastGPT 使用方式是否属于 SaaS。
+- 是否需要商业授权。
+- 客户交付是否保留版权信息。
+- 是否只把 FastGPT 用作客户本地私有化后台服务。
+
+这个问题不要等产品上线后再处理。
+
 ## 运行服务边界
 
 当前本地开发端口：
